@@ -5,15 +5,23 @@ type ProposalID struct {
 	uid    uint
 }
 
-//True: this id is larger than the otherone
-func (id *ProposalID) LargerThan(anotherID ProposalID) bool {
+//>0: this id is larger than the otherone
+//=0: equal
+//<0: less
+func (id *ProposalID) Compare(anotherID ProposalID) int {
 	if id.number > anotherID.number {
-		return true
+		return 1
 	}
 	if id.number < anotherID.number {
-		return false
+		return -1
 	}
-	return id.uid > anotherID.uid
+	if id.uid > anotherID.uid {
+		return 1
+	}
+	if id.uid < anotherID.uid {
+		return -1
+	}
+	return 0
 }
 
 /*
@@ -65,7 +73,7 @@ func (proposer *Proposer) recv_promise(from_uid uint, proposal_id ProposalID, pr
 		return
 	}
 	proposer.promises_rcvd[from_uid] = true
-	if prev_accepted_id.LargerThan(proposer.last_accepted_id) {
+	if prev_accepted_id.Compare(proposer.last_accepted_id) > 0 {
 		proposer.last_accepted_id = prev_accepted_id
 		//If the Acceptor has already accepted a value, we MUST set our proposal to that value.
 		if prev_accepted_value != -1 {
@@ -83,14 +91,36 @@ type Accepter struct {
 	messanger   *Messanger
 	accepter_id uint
 
-	promised_id    int
-	accepted_id    int
+	promised_id    ProposalID
+	accepted_id    ProposalID
 	accepted_value int
 }
 
 func (accepter *Accepter) Init(messanger *Messanger) {
 	accepter.messanger = messanger
 	messanger.RegAccepter(accepter)
+	accepter.accepted_value = -1
+}
+
+//Called when a Prepare message is received from a Proposer
+func (accepter *Accepter) recv_prepare(from_uid uint, proposal_id ProposalID) {
+	//Duplicate prepare message
+	if proposal_id == accepter.promised_id {
+		accepter.messanger.send_promise(from_uid, proposal_id, accepter.accepted_id, accepter.accepted_value)
+	} else if proposal_id.Compare(accepter.promised_id) > 0 {
+		accepter.promised_id = proposal_id
+		accepter.messanger.send_promise(from_uid, proposal_id, accepter.accepted_id, accepter.accepted_value)
+	}
+}
+
+//Called when an Accept message is received from a Proposer
+func (accepter *Accepter) recv_accept_request(from_uid uint, proposal_id ProposalID, value int) {
+	if proposal_id.Compare(accepter.promised_id) >= 0 {
+		accepter.promised_id = proposal_id
+		accepter.accepted_id = proposal_id
+		accepter.accepted_value = value
+		accepter.messanger.send_accepted(accepter.accepter_id, proposal_id, value)
+	}
 }
 
 type Learner struct {
@@ -131,21 +161,25 @@ func (messanger *Messanger) RegLearner(learner *Learner) {
 }
 
 //Broadcasts a Prepare message to all Acceptors
-func (messanger *Messanger) send_prepare(proposal_id ProposalID) {
+//from_uid indicates the proposer id
+func (messanger *Messanger) send_prepare(from_uid uint, proposal_id ProposalID) {
 
 }
 
 //Sends a Promise message to the specified Proposer
-func (messanger *Messanger) send_promise(from_uid uint, proposal_id ProposalID, previous_id int, accepted_value int) {
+//to_uid indicates the proposer id
+func (messanger *Messanger) send_promise(to_uid uint, proposal_id ProposalID, previous_id ProposalID, accepted_value int) {
 }
 
 //Broadcasts an Accept message to all Acceptors
-func (messanger *Messanger) send_accept(proposal_id ProposalID, proposal_value int) {
+//from_uid indicates the proposer id
+func (messanger *Messanger) send_accept(from_uid uint, proposal_id ProposalID, proposal_value int) {
 
 }
 
 //Broadcasts an Accepted message to all Learners
-func (messanger *Messanger) send_accepted(proposal_id ProposalID, accepted_value int) {
+//from_uid indicates the accepter id
+func (messanger *Messanger) send_accepted(from_uid uint, proposal_id ProposalID, accepted_value int) {
 
 }
 
