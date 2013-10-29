@@ -2,10 +2,16 @@ package logic
 
 import "fmt"
 import "os"
+import "time"
+import "sync"
 
 type ProposalID struct {
 	number int
 	uid    uint
+}
+
+func (id ProposalID) String() string {
+	return fmt.Sprintf("%x", id.number<<32+int(id.uid))
 }
 
 //>0: this id is larger than the otherone
@@ -52,10 +58,18 @@ func (proposer *Proposer) Init(messanger *Messanger, name string) {
 	proposer.proposed_value = -1
 }
 
+func (proposer *Proposer) Begin_propose_loop(value int) {
+	proposer.set_proposal(value)
+	for {
+		proposer.prepare()
+		time.Sleep(3000 * time.Millisecond)
+	}
+}
+
 //Sets the proposal value for this node iff this node is not already aware of
 //another proposal having already been accepted.
 func (proposer *Proposer) set_proposal(value int) {
-	if proposer.proposed_value != -1 {
+	if proposer.proposed_value == -1 {
 		proposer.proposed_value = value
 	}
 }
@@ -66,13 +80,17 @@ func (proposer *Proposer) prepare() {
 	proposer.promises_rcvd = make(map[uint]bool)
 	proposer.proposal_id = ProposalID{number: proposer.next_proposal_num, uid: proposer.proposer_uid}
 	proposer.next_proposal_num += 1
-	fmt.Printf(" [ %s ] send_prepare for id = %v\n", proposer.name, proposer.proposal_id)
+	proposer.messanger.printfMutex.Lock()
+	fmt.Printf(" [ %s ] send_prepare for id = %s\n", proposer.name, proposer.proposal_id)
+	proposer.messanger.printfMutex.Unlock()
 	proposer.messanger.send_prepare(proposer.proposer_uid, proposer.proposal_id)
 }
 
 func (proposer *Proposer) recv_promise(from_uid uint, proposal_id ProposalID, prev_accepted_id ProposalID, prev_accepted_value int) {
 	//Ignore the message if it's for an old proposal or we have already received a response from this Acceptor
-	fmt.Printf(" [ %s ] recv_promise from %d with proposal_id = %v, prev_accepted_id = %v, prev_accepted_value = %d\n", proposer.name, from_uid, proposal_id, prev_accepted_id, prev_accepted_value)
+	proposer.messanger.printfMutex.Lock()
+	fmt.Printf(" [ %s ] recv_promise from < %s > with proposal_id = %s, prev_accepted_id = %v, prev_accepted_value = %d\n", proposer.name, proposer.messanger.nameMap[from_uid], proposal_id, prev_accepted_id, prev_accepted_value)
+	proposer.messanger.printfMutex.Unlock()
 	if proposal_id != proposer.proposal_id {
 		return
 	}
@@ -87,10 +105,12 @@ func (proposer *Proposer) recv_promise(from_uid uint, proposal_id ProposalID, pr
 			proposer.proposed_value = prev_accepted_value
 		}
 	}
-	proposer.quorum_size = len(proposer.messanger.Accepters)
+	proposer.quorum_size = len(proposer.messanger.Accepters)/2 + 1
 	if len(proposer.promises_rcvd) == proposer.quorum_size {
 		if proposer.proposed_value != -1 {
-			fmt.Printf(" [ %s ] send_accept with id = %v, value = %d\n", proposer.name, proposer.proposal_id, proposer.proposed_value)
+			proposer.messanger.printfMutex.Lock()
+			fmt.Printf(" [ %s ] send_accept with id = %s, value = %d\n", proposer.name, proposer.proposal_id, proposer.proposed_value)
+			proposer.messanger.printfMutex.Unlock()
 			proposer.messanger.send_accept(proposer.proposer_uid, proposer.proposal_id, proposer.proposed_value)
 		}
 	}
@@ -115,25 +135,36 @@ func (accepter *Accepter) Init(messanger *Messanger, name string) {
 
 //Called when a Prepare message is received from a Proposer
 func (accepter *Accepter) recv_prepare(from_uid uint, proposal_id ProposalID) {
-	fmt.Printf(" [ %s ] recv_prepare from %d with proposal_id = %v\n", accepter.name, from_uid, proposal_id)
+	accepter.messanger.printfMutex.Lock()
+	fmt.Printf(" [ %s ] recv_prepare from < %s > with proposal_id = %s\n", accepter.name, accepter.messanger.nameMap[from_uid], proposal_id)
+	accepter.messanger.printfMutex.Unlock()
 	//Duplicate prepare message
 	if proposal_id == accepter.promised_id {
-		accepter.messanger.send_promise(from_uid, proposal_id, accepter.accepted_id, accepter.accepted_value)
+		accepter.messanger.printfMutex.Lock()
+		fmt.Printf(" [ %s ] send_promise to < %s > with proposal_id = %s, accepted_id = %s, accepted_value = %d\n", accepter.name, accepter.messanger.nameMap[from_uid], proposal_id, accepter.accepted_id, accepter.accepted_value)
+		accepter.messanger.printfMutex.Unlock()
+		accepter.messanger.send_promise(accepter.accepter_uid, from_uid, proposal_id, accepter.accepted_id, accepter.accepted_value)
 	} else if proposal_id.Compare(accepter.promised_id) > 0 {
 		accepter.promised_id = proposal_id
-		fmt.Printf(" [ %s ] send_promise to %d with proposal_id = %v, accepted_id = %v, accepted_value = %d\n", accepter.name, from_uid, proposal_id, accepter.accepted_id, accepter.accepted_value)
-		accepter.messanger.send_promise(from_uid, proposal_id, accepter.accepted_id, accepter.accepted_value)
+		accepter.messanger.printfMutex.Lock()
+		fmt.Printf(" [ %s ] send_promise to < %s > with proposal_id = %s, accepted_id = %s, accepted_value = %d\n", accepter.name, accepter.messanger.nameMap[from_uid], proposal_id, accepter.accepted_id, accepter.accepted_value)
+		accepter.messanger.printfMutex.Unlock()
+		accepter.messanger.send_promise(accepter.accepter_uid, from_uid, proposal_id, accepter.accepted_id, accepter.accepted_value)
 	}
 }
 
 //Called when an Accept message is received from a Proposer
 func (accepter *Accepter) recv_accept_request(from_uid uint, proposal_id ProposalID, value int) {
-	fmt.Printf(" [ %s ] recv_accept_request from %d with proposal_id = %v, value = %d\n", accepter.name, from_uid, proposal_id, value)
+	accepter.messanger.printfMutex.Lock()
+	fmt.Printf(" [ %s ] recv_accept_request from < %s > with proposal_id = %s, value = %d\n", accepter.name, accepter.messanger.nameMap[from_uid], proposal_id, value)
+	accepter.messanger.printfMutex.Unlock()
 	if proposal_id.Compare(accepter.promised_id) >= 0 {
 		accepter.promised_id = proposal_id
 		accepter.accepted_id = proposal_id
 		accepter.accepted_value = value
-		fmt.Printf(" [ %s ] send_accepted with proposal_id = %v, value = %d\n", accepter.name, proposal_id, value)
+		accepter.messanger.printfMutex.Lock()
+		fmt.Printf(" [ %s ] send_accepted with proposal_id = %s, value = %d\n", accepter.name, proposal_id, value)
+		accepter.messanger.printfMutex.Unlock()
 		accepter.messanger.send_accepted(accepter.accepter_uid, proposal_id, value)
 	}
 }
@@ -165,7 +196,9 @@ func (learner *Learner) isComplete() bool {
 
 //Called when an Accepted message is received from an acceptor
 func (learner *Learner) recv_accepted(from_uid uint, proposal_id ProposalID, accepted_value int) {
-	fmt.Printf(" [ %s ] recv_accepted from %d with proposal_id %v, accepted_value = %d\n", learner.name, from_uid, proposal_id, accepted_value)
+	learner.messanger.printfMutex.Lock()
+	fmt.Printf(" [ %s ] recv_accepted from < %s > with proposal_id = %s, accepted_value = %d\n", learner.name, learner.messanger.nameMap[from_uid], proposal_id, accepted_value)
+	learner.messanger.printfMutex.Unlock()
 	if learner.final_value != -1 {
 		return //already complete
 	}
@@ -191,7 +224,7 @@ func (learner *Learner) recv_accepted(from_uid uint, proposal_id ProposalID, acc
 	t := learner.proposals[proposal_id]
 	t[0]++
 	t[1]++
-	learner.quorum_size = len(learner.messanger.Accepters)
+	learner.quorum_size = len(learner.messanger.Accepters)/2 + 1
 	if t[0] == learner.quorum_size {
 		learner.final_value = accepted_value
 		learner.final_proposal_id = proposal_id
@@ -203,32 +236,38 @@ func (learner *Learner) recv_accepted(from_uid uint, proposal_id ProposalID, acc
 }
 
 type Messanger struct {
-	Proposers []*Proposer
-	Accepters []*Accepter
-	Learners  []*Learner
-	next_uid  uint
+	Proposers   []*Proposer
+	Accepters   []*Accepter
+	Learners    []*Learner
+	nameMap     map[uint]string
+	printfMutex sync.Mutex
+	next_uid    uint
 }
 
 func (messanger *Messanger) Init() {
 	messanger.Proposers = make([]*Proposer, 0)
 	messanger.Accepters = make([]*Accepter, 0)
 	messanger.Learners = make([]*Learner, 0)
+	messanger.nameMap = make(map[uint]string)
 	messanger.next_uid = 0
 }
 
 func (messanger *Messanger) RegProposer(proposer *Proposer) (uid uint) {
 	messanger.Proposers = append(messanger.Proposers, proposer)
 	messanger.next_uid++
+	messanger.nameMap[messanger.next_uid] = proposer.name
 	return messanger.next_uid
 }
 func (messanger *Messanger) RegAccepter(accepter *Accepter) (uid uint) {
 	messanger.Accepters = append(messanger.Accepters, accepter)
 	messanger.next_uid++
+	messanger.nameMap[messanger.next_uid] = accepter.name
 	return messanger.next_uid
 }
 func (messanger *Messanger) RegLearner(learner *Learner) (uid uint) {
 	messanger.Learners = append(messanger.Learners, learner)
 	messanger.next_uid++
+	messanger.nameMap[messanger.next_uid] = learner.name
 	return messanger.next_uid
 }
 
@@ -242,10 +281,10 @@ func (messanger *Messanger) send_prepare(from_uid uint, proposal_id ProposalID) 
 
 //Sends a Promise message to the specified Proposer
 //to_uid indicates the proposer id
-func (messanger *Messanger) send_promise(to_uid uint, proposal_id ProposalID, previous_id ProposalID, accepted_value int) {
+func (messanger *Messanger) send_promise(from_uid uint, to_uid uint, proposal_id ProposalID, previous_id ProposalID, accepted_value int) {
 	for i := 0; i < len(messanger.Proposers); i++ {
 		if messanger.Proposers[i].proposer_uid == to_uid {
-			go messanger.Proposers[i].recv_promise(to_uid, proposal_id, previous_id, accepted_value)
+			go messanger.Proposers[i].recv_promise(from_uid, proposal_id, previous_id, accepted_value)
 			return
 		}
 	}
@@ -271,6 +310,8 @@ func (messanger *Messanger) send_accepted(from_uid uint, proposal_id ProposalID,
 
 //Called when a resolution is reached
 func (messanger *Messanger) on_resolution(proposal_id ProposalID, value int) {
-	fmt.Println(" [ Resolution ] with proposal_id = %v, value = %d", proposal_id, value)
+	messanger.printfMutex.Lock()
+	fmt.Printf(" [ Resolution ] with proposal_id = %s, value = %d\n", proposal_id, value)
+	messanger.printfMutex.Unlock()
 	os.Exit(0)
 }
