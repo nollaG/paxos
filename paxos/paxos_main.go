@@ -6,6 +6,8 @@ import "runtime"
 var g_messanger logic.Messanger
 
 func main() {
+	//To use all CPU
+	runtime.GOMAXPROCS(runtime.NumCPU())
 	g_messanger.Init()
 	proposer1 := new(logic.Proposer)
 	proposer1.Init(&g_messanger, "proposer1")
