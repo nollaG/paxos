@@ -5,6 +5,20 @@ import "os"
 import "time"
 import "sync"
 
+//Use this to simulate the transfer delay
+import "math/rand"
+
+//Delay [from, to) ms
+func transferDelay(from int64, to int64) {
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+	delayTime := from + r.Int63n(to-from)
+	time.Sleep(time.Duration(delayTime) * time.Millisecond)
+}
+
+func randomDelay() {
+	transferDelay(1000, 3000)
+}
+
 type ProposalID struct {
 	number int
 	uid    uint
@@ -37,10 +51,12 @@ func (id *ProposalID) Compare(anotherID ProposalID) int {
 *Proposer type
  */
 type Proposer struct {
-	name         string
-	messanger    *Messanger
-	proposer_uid uint
-	quorum_size  int
+	name                   string
+	messanger              *Messanger
+	proposer_uid           uint
+	quorum_size            int
+	recv_new_promise_mutex sync.Mutex
+	recv_new_promise       bool
 
 	proposed_value    int
 	proposal_id       ProposalID
@@ -56,13 +72,21 @@ func (proposer *Proposer) Init(messanger *Messanger, name string) {
 	proposer.name = name
 	proposer.proposer_uid = messanger.RegProposer(proposer)
 	proposer.proposed_value = -1
+	proposer.recv_new_promise = false
 }
 
 func (proposer *Proposer) Begin_propose_loop(value int) {
 	proposer.set_proposal(value)
 	for {
-		proposer.prepare()
-		time.Sleep(3000 * time.Millisecond)
+		//If the proposer have receieved a promise response in ten seconds,
+		//continue waiting then
+		if !proposer.recv_new_promise {
+			proposer.prepare()
+		}
+		time.Sleep(10000 * time.Millisecond)
+		proposer.recv_new_promise_mutex.Lock()
+		proposer.recv_new_promise = false
+		proposer.recv_new_promise_mutex.Unlock()
 	}
 }
 
@@ -87,6 +111,7 @@ func (proposer *Proposer) prepare() {
 }
 
 func (proposer *Proposer) recv_promise(from_uid uint, proposal_id ProposalID, prev_accepted_id ProposalID, prev_accepted_value int) {
+	randomDelay()
 	//Ignore the message if it's for an old proposal or we have already received a response from this Acceptor
 	proposer.messanger.printfMutex.Lock()
 	fmt.Printf(" [ %s ] recv_promise from < %s > with proposal_id = %s, prev_accepted_id = %v, prev_accepted_value = %d\n", proposer.name, proposer.messanger.nameMap[from_uid], proposal_id, prev_accepted_id, prev_accepted_value)
@@ -98,6 +123,9 @@ func (proposer *Proposer) recv_promise(from_uid uint, proposal_id ProposalID, pr
 		return
 	}
 	proposer.promises_rcvd[from_uid] = true
+	proposer.recv_new_promise_mutex.Lock()
+	proposer.recv_new_promise = true
+	proposer.recv_new_promise_mutex.Unlock()
 	if prev_accepted_id.Compare(proposer.last_accepted_id) > 0 {
 		proposer.last_accepted_id = prev_accepted_id
 		//If the Acceptor has already accepted a value, we MUST set our proposal to that value.
@@ -135,6 +163,7 @@ func (accepter *Accepter) Init(messanger *Messanger, name string) {
 
 //Called when a Prepare message is received from a Proposer
 func (accepter *Accepter) recv_prepare(from_uid uint, proposal_id ProposalID) {
+	randomDelay()
 	accepter.messanger.printfMutex.Lock()
 	fmt.Printf(" [ %s ] recv_prepare from < %s > with proposal_id = %s\n", accepter.name, accepter.messanger.nameMap[from_uid], proposal_id)
 	accepter.messanger.printfMutex.Unlock()
@@ -155,6 +184,7 @@ func (accepter *Accepter) recv_prepare(from_uid uint, proposal_id ProposalID) {
 
 //Called when an Accept message is received from a Proposer
 func (accepter *Accepter) recv_accept_request(from_uid uint, proposal_id ProposalID, value int) {
+	randomDelay()
 	accepter.messanger.printfMutex.Lock()
 	fmt.Printf(" [ %s ] recv_accept_request from < %s > with proposal_id = %s, value = %d\n", accepter.name, accepter.messanger.nameMap[from_uid], proposal_id, value)
 	accepter.messanger.printfMutex.Unlock()
@@ -196,6 +226,7 @@ func (learner *Learner) isComplete() bool {
 
 //Called when an Accepted message is received from an acceptor
 func (learner *Learner) recv_accepted(from_uid uint, proposal_id ProposalID, accepted_value int) {
+	randomDelay()
 	learner.messanger.printfMutex.Lock()
 	fmt.Printf(" [ %s ] recv_accepted from < %s > with proposal_id = %s, accepted_value = %d\n", learner.name, learner.messanger.nameMap[from_uid], proposal_id, accepted_value)
 	learner.messanger.printfMutex.Unlock()
