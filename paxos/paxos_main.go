@@ -8,7 +8,8 @@ var g_messanger logic.Messanger
 func main() {
 	//To use all CPU
 	runtime.GOMAXPROCS(runtime.NumCPU())
-	g_messanger.Init()
+	//no packet loss
+	g_messanger.Init(0.2)
 	proposer1 := new(logic.Proposer)
 	proposer1.Init(&g_messanger, "proposer1")
 	proposer2 := new(logic.Proposer)
